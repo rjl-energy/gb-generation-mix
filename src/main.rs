@@ -1,33 +1,44 @@
 use std::fs::File;
 use std::io;
 use std::io::{BufReader, Cursor};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Result;
 use csv::{Reader, ReaderBuilder};
+use homedir::my_home;
 use indicatif::{ProgressBar, ProgressStyle};
 use rusqlite::{Connection, params};
+use tempfile::TempDir;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let dir_path = Path::new("src");
-    let file_path = download_archive(dir_path).await?;
-    convert_to_sql(&file_path)?;
+    const URL: &str = "https://api.nationalgrideso.com/dataset/88313ae5-94e4-4ddc-a790-593554d8c6b9/resource/f93d1835-75bc-43e5-84ad-12472b180a98/download/df_fuel_ckan.csv";
+    const CSV_FILE_NAME: &str = "GB_Generation_Mix.csv";
+    const SQLITE_DB_NAME: &str = "generation-mix-national.sqlite";
 
-    Ok(())
-}
+    println!("This script will download the generation mix csv from the National Grid API and convert it to a sqlite database.");
+    println!("Original data source: https://www.nationalgrideso.com/data-portal/historic-generation-mix/historic_gb_generation_mix");
+    println!();
 
-pub async fn download_archive(temp_dir: &Path) -> Result<PathBuf> {
-    let url = "https://api.nationalgrideso.com/dataset/88313ae5-94e4-4ddc-a790-593554d8c6b9/resource/f93d1835-75bc-43e5-84ad-12472b180a98/download/df_fuel_ckan.csv";
-    let file_name = "GB_Generation_Mix.csv";
-    let file_path = temp_dir.join(file_name);
-
-    let bar = create_spinner("Downloading generation mix csv...".to_string());
-    download_csv(url, file_path.clone()).await?;
+    // download the csv file to a temporary directory
+    let tmp_dir = TempDir::new()?;
+    let csv_file_path = tmp_dir.path().join(CSV_FILE_NAME);
+    let bar = create_spinner("Downloading generation mix csv from https://api.nationalgrideso.com...".to_string());
+    download_csv(URL, csv_file_path.clone()).await?;
     bar.finish_with_message("Generation mix csv downloaded");
 
-    Ok(file_path)
+    // convert the csv file to a sqlite database
+    let my_home_dir = my_home().unwrap().unwrap();
+    let sql_file_path = my_home_dir.join(SQLITE_DB_NAME);
+    match convert_to_sql(&csv_file_path, &sql_file_path) {
+        Ok(_) => println!("Successfully saved data to '{}'", sql_file_path.display()),
+        Err(_) => eprintln!("Failed to convert csv to sqlite"),
+    };
+
+    println!("Done!");
+
+    Ok(())
 }
 
 /// Downloads the tarball from the specified URL and saves it to the specified file path.
@@ -48,9 +59,7 @@ pub async fn download_csv(url: &str, file_path: PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn convert_to_sql(csv_file: &PathBuf) -> Result<()> {
-
-
+fn convert_to_sql(csv_file: &PathBuf, sql_file: &PathBuf) -> Result<()> {
     // Open the CSV file
     let file = File::open(csv_file).map_err(|e| {
         println!("Could not open csv file {}: {}", csv_file.display(), e);
@@ -60,9 +69,8 @@ fn convert_to_sql(csv_file: &PathBuf) -> Result<()> {
 
     let mut rdr = Reader::from_reader(file);
 
-
     // Connect to SQLite database (or create if it doesn't exist)
-    let conn = Connection::open("generation-mix-national.db")?;
+    let conn = Connection::open(sql_file)?;
 
     // Create a table with columns matching CSV headers
     conn.execute(
