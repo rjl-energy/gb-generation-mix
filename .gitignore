@@ -2,3 +2,4 @@
 .idea
 *.sqlite
 *.csv
+.DS_Store
